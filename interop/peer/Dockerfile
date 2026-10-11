@@ -3,7 +3,8 @@
 #
 # tinytuya (MIT, github.com/jasonacox/tinytuya) as an interop peer; it is
 # installed from PyPI at build time, not redistributed.
-FROM python:3.14-slim
+FROM python:3.12.10-slim
 RUN pip install --no-cache-dir tinytuya==1.20.0
 COPY device.py /peer/device.py
 WORKDIR /peer
+COPY vectors.py /peer/vectors.py

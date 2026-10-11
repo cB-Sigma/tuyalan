@@ -68,7 +68,7 @@ func ParseBroadcast(b []byte) (Broadcast, error) {
 }
 
 // EncodeBroadcast builds the datagram a device of the given version sends
-// (the sim package uses it).
+// (tuyalan-sim uses it).
 func EncodeBroadcast(b Broadcast) ([]byte, error) {
 	j, err := json.Marshal(b)
 	if err != nil {

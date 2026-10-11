@@ -8,11 +8,18 @@
 # the protocol, not against ours. The device logic (which command answers
 # what) is this script's. It is a test peer, not a device emulator.
 #
-#   python device.py <version> <device id> <local key>
+#   python device.py <version> <device id> <local key> [<cid>,<cid>...]
 #
-# Listens on TCP 6668. Prints "PEER <event> <json>" lines; reads commands
-# on standard input: "push <json dps>" sends a status push, "bcast" prints
-# the discovery announcement of this version as hex, "quit".
+# Listens on TCP 6668 and on UDP 7000 (REQ_DEVINFO requests, decoded with
+# tinytuya's udp_helper.decrypt_udp and answered with this version's
+# announcement to the request's source). With cids it is a gateway whose
+# sub-devices are addressed by "cid" in requests; answers and pushes about
+# them carry the cid. Prints "PEER <event> <json>" lines; reads commands
+# on standard input: "push <json dps>" sends a status push, "pushsub <cid>
+# <json dps>" one of a sub-device, "bcast" prints the discovery
+# announcement of this version as hex, "payloads <cid>" prints the
+# requests tinytuya itself builds for a sub-device (generate_payload),
+# "quit".
 
 import json
 import os
@@ -29,11 +36,12 @@ from tinytuya.core import command_types as CT
 from tinytuya.core import header as H
 from tinytuya.core.crypto_helper import AESCipher
 from tinytuya.core.message_helper import TuyaMessage, pack_message, parse_header, unpack_message
-from tinytuya.core.udp_helper import udpkey
+from tinytuya.core.udp_helper import decrypt_udp, udpkey
 
 VERSION, DEV_ID, LOCAL_KEY = sys.argv[1], sys.argv[2], sys.argv[3].encode()
 V = float(VERSION)
 dps = {"1": False, "2": 100}
+SUBS = {c: {"1": False, "19": 0} for c in (sys.argv[4].split(",") if len(sys.argv) > 4 and sys.argv[4] else [])}
 lock = threading.Lock()
 conns = []
 
@@ -181,40 +189,61 @@ class Session:
         except Exception:
             say("bad-json", {"cmd": cmd, "hex": p.hex()})
             return
+        data = req.get("data") if isinstance(req.get("data"), dict) else {}
+        cid = req.get("cid") or data.get("cid")
+        if cid and cid not in SUBS:
+            say("unknown-cid", {"cmd": cmd, "cid": cid})
+            self.send(cmd, b"", seq=msg.seqno, retcode=1)
+            return
+        target = SUBS[cid] if cid else dps
         if cmd in (CT.DP_QUERY, CT.DP_QUERY_NEW):
             say("query", {"cmd": cmd, "req": req})
-            if V >= 3.2 and V < 3.3 and cmd == CT.DP_QUERY:
+            if V >= 3.2 and V < 3.3 and cmd == CT.DP_QUERY and not cid:
                 self.send(cmd, b"json obj data unvalid", seq=msg.seqno)
                 return
             with lock:
-                body = {"devId": DEV_ID, "dps": dict(dps), "t": int(time.time())}
+                body = {"devId": DEV_ID, "dps": dict(target), "t": int(time.time())}
+            if cid:
+                body["cid"] = cid
             self.send(cmd, json.dumps(body).encode(), seq=msg.seqno)
             return
+        if cmd == CT.UPDATEDPS:
+            say("update", {"cmd": cmd, "req": req})
+            self.send(cmd, b"", seq=msg.seqno)
+            with lock:
+                vals = {str(k): target[str(k)] for k in req.get("dpId", []) if str(k) in target}
+            if vals:
+                self.push(vals, cid)
+            return
         if cmd in (CT.CONTROL, CT.CONTROL_NEW):
-            asked = req.get("dps") or (req.get("data") or {}).get("dps") or {}
-            say("control", {"cmd": cmd, "dps": asked, "protocol": req.get("protocol")})
+            asked = req.get("dps") or data.get("dps") or {}
+            say("control", {"cmd": cmd, "dps": asked, "protocol": req.get("protocol"), "req": req})
             query, changed = [], {}
             with lock:
                 for k, v in asked.items():
                     if v is None:
                         query.append(k)
-                    elif k in dps:
-                        dps[k] = v
+                    elif k in target:
+                        target[k] = v
                         changed[k] = v
             self.send(cmd, b"", seq=msg.seqno)
             if query:
                 with lock:
-                    self.push({k: dps[k] for k in query if k in dps})
+                    self.push({k: target[k] for k in query if k in target}, cid)
             if changed:
-                self.push(changed)
+                self.push(changed, cid)
             return
         say("unknown", {"cmd": cmd})
 
-    def push(self, values):
+    def push(self, values, cid=None):
         if V >= 3.4:
             body = {"protocol": 4, "t": int(time.time()), "data": {"dps": values}}
+            if cid:
+                body["data"]["cid"] = cid
         else:
             body = {"devId": DEV_ID, "dps": values, "t": int(time.time())}
+            if cid:
+                body["cid"] = cid
         self.send(CT.STATUS, json.dumps(body).encode())
 
 
@@ -227,6 +256,35 @@ def broadcast():
         return pack_message(TuyaMessage(0, CT.UDP_NEW, 0, body, 0, True, H.PREFIX_6699_VALUE, True), hmac_key=udpkey)
     ct = AESCipher(udpkey).encrypt(body, False)
     return pack_message(TuyaMessage(0, CT.UDP_NEW, 0, struct.pack(">I", 0) + ct, 0, True, H.PREFIX_55AA_VALUE, None))
+
+
+def devinfo_loop(u):
+    while True:
+        data, src = u.recvfrom(4096)
+        try:
+            req = json.loads(decrypt_udp(data))
+        except Exception as e:
+            say("devinfo-bad", {"error": repr(e), "hex": data.hex()})
+            continue
+        say("devinfo-request", {"req": req, "cmd": parse_header(data).cmd})
+        u.sendto(broadcast(), src)
+
+
+def child_payloads(cid):
+    """The requests tinytuya builds for a sub-device of this gateway."""
+    # Port 1: tinytuya probes 3.2 devices for their data points when the
+    # version is set; the probe must fail at once rather than reach us.
+    gw = tinytuya.Device(DEV_ID, "127.0.0.1", LOCAL_KEY.decode(), version=V, port=1,
+                         connection_retry_limit=1, connection_retry_delay=0)
+    child = tinytuya.Device("childdevice00001", cid=cid, parent=gw)
+    child.set_dpsUsed({"1": None, "19": None})
+    out = {}
+    for name, cmd, data in (("control", CT.CONTROL, {"1": True}), ("query", CT.DP_QUERY, None), ("update", CT.UPDATEDPS, [19])):
+        m = child.generate_payload(cmd, data)
+        out[name] = {"cmd": m.cmd, "json": json.loads(m.payload)}
+    m = gw.generate_payload(CT.UPDATEDPS, [18, 19, 20])
+    out["gw-update"] = {"cmd": m.cmd, "json": json.loads(m.payload)}
+    return out
 
 
 def accept_loop(srv):
@@ -257,6 +315,9 @@ def main():
     srv.bind(("0.0.0.0", 6668))
     srv.listen(4)
     threading.Thread(target=accept_loop, args=(srv,), daemon=True).start()
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    u.bind(("0.0.0.0", 7000))
+    threading.Thread(target=devinfo_loop, args=(u,), daemon=True).start()
     say("ready", {"tinytuya": tinytuya.__version__, "version": VERSION})
     for line in sys.stdin:
         parts = line.strip().split(" ", 1)
@@ -268,6 +329,15 @@ def main():
                 dps.update(values)
             conns[-1].push(values)
             say("pushed", values)
+        if parts[0] == "pushsub" and conns:
+            cid, js = parts[1].split(" ", 1)
+            values = json.loads(js)
+            with lock:
+                SUBS[cid].update(values)
+            conns[-1].push(values, cid)
+            say("pushed", values)
+        if parts[0] == "payloads":
+            say("payloads", child_payloads(parts[1]))
         if parts[0] == "bcast":
             say("bcast", {"hex": broadcast().hex()})
 
