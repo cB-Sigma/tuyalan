@@ -18,8 +18,9 @@
 # on standard input: "push <json dps>" sends a status push, "pushsub <cid>
 # <json dps>" one of a sub-device, "bcast" prints the discovery
 # announcement of this version as hex, "payloads <cid>" prints the
-# requests tinytuya itself builds for a sub-device (generate_payload),
-# "quit".
+# requests tinytuya itself builds for a sub-device (generate_payload) and
+# the gateway's sub-device online query, "quit". A LAN_EXT_STREAM
+# sub-device online query is answered with the cids as online.
 
 import json
 import os
@@ -196,6 +197,14 @@ class Session:
             self.send(cmd, b"", seq=msg.seqno, retcode=1)
             return
         target = SUBS[cid] if cid else dps
+        if cmd == CT.LAN_EXT_STREAM:
+            # The sub-device online query; the answer's fields (online,
+            # offline in "data") are those LocalTuya reads from gateways.
+            say("lanext", {"cmd": cmd, "req": req})
+            if req.get("reqType") == "subdev_online_stat_query":
+                body = {"reqType": "subdev_online_stat_report", "data": {"online": sorted(SUBS), "offline": []}}
+                self.send(cmd, json.dumps(body).encode(), seq=msg.seqno)
+            return
         if cmd in (CT.DP_QUERY, CT.DP_QUERY_NEW):
             say("query", {"cmd": cmd, "req": req})
             if V >= 3.2 and V < 3.3 and cmd == CT.DP_QUERY and not cid:
@@ -284,6 +293,9 @@ def child_payloads(cid):
         out[name] = {"cmd": m.cmd, "json": json.loads(m.payload)}
     m = gw.generate_payload(CT.UPDATEDPS, [18, 19, 20])
     out["gw-update"] = {"cmd": m.cmd, "json": json.loads(m.payload)}
+    # The sub-device online query (gateway-level LAN_EXT_STREAM request).
+    m = gw.generate_payload(CT.LAN_EXT_STREAM, rawData={"cids": []}, reqType="subdev_online_stat_query")
+    out["subdev-query"] = {"cmd": m.cmd, "json": json.loads(m.payload)}
     return out
 
 

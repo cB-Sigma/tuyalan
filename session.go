@@ -328,12 +328,17 @@ func (c *Conn) Query() error {
 // QueryByControl asks for the listed data points with CONTROL_NEW and null
 // values, for 3.3 devices that refuse DP_QUERY.
 func (c *Conn) QueryByControl(ids []string) error {
+	_, err := c.queryByControlSeq(ids)
+	return err
+}
+
+func (c *Conn) queryByControlSeq(ids []string) (uint32, error) {
 	dps := map[string]any{}
 	for _, id := range ids {
 		dps[id] = nil
 	}
 	b, _ := json.Marshal(map[string]any{"devId": c.devID, "uid": c.devID, "t": now(), "dps": dps})
-	return c.send(CmdControlNew, b)
+	return c.sendSeq(CmdControlNew, b)
 }
 
 // Heartbeat sends a heartbeat.

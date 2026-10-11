@@ -47,6 +47,39 @@ History:
   colour conversion follows the published algorithm of Python's
   colorsys, written out in Go. The interop peer was moved to
   python:3.12.10-slim and rerun on it.
+- 2026-10-11/12, v0.3.0: device.go, detect.go and ir.go were written for
+  this module, and `IdentifyWithKeys` (scan.go) and `SubdevQuery` /
+  `ParseSubdevStatus` (gateway.go) added, after reading for behaviour
+  only: tinytuya 1.20.0's sdist from PyPI and its GitHub master
+  (tinytuya/core/XenonDevice.py: the subdev_query request, the
+  detect_available_dps ranges, the device22 switch; tinytuya/scanner.py:
+  the force scan trying a key list; tinytuya/Contrib/IRRemoteControlDevice.py:
+  the little-endian pulse packing, the NEC and Samsung bit orders and
+  timings), hass-localtuya (xZetsubou, GPL-3.0, master on 2026-10-11:
+  core/pytuya/__init__.py, only for the field names of a gateway's answer
+  to the sub-device online query: "online", "offline", "nearby" in
+  "data", and that 3.3 gateways do not answer it), and tiny-go v1.0.1
+  (MIT; its Monitor and ForceScan, for the comparison only). No code was
+  copied or translated; the persistent client's design (one reader per
+  session dispatching to waiters, a supervisor that reconnects) is our
+  own.
+- 2026-10-12, v0.3.0 continued: ir_headkey.go and the contrib package
+  were written after reading tinytuya 1.20.0 (sdist from PyPI) for
+  behaviour: Contrib/IRRemoteControlDevice.py (the head layout, the key's
+  symbol and bit-field rules, the packer's steps and tie-breaking, the
+  Pronto conversions, the type 1 and type 2 command data points) and the
+  other 14 Contrib classes (AtorchTemperatureController, Blanket,
+  Climate, ColorfulX7, Doorbell, FloorFan, InverterHeatPump,
+  PresenceDetector, RFRemoteControl, Socket, SoriaInverter, Thermostat,
+  TowelRailHeater, WiFiDualMeter: their data point numbers, value
+  ranges, scalings, refusals, the thermostat's schedule and sensor record
+  layouts, the SORIA frame layout), plus core/XenonDevice.py for the
+  removal of spaces from every payload. The packer is reproduced step for
+  step, because a heuristic agrees with tinytuya only if it makes the same
+  choices; the Go is written anew (Python's insertion-ordered dicts are
+  modelled with explicit order, and Python's round() with round half to
+  even). The Go types (layout structs, State readers, setters returning
+  maps) are our own design.
 
 ## Sources
 
@@ -58,7 +91,12 @@ History:
 | Active discovery and scanning (active.go, scan.go) | none published | tinytuya 1.20.0 (MIT), scanner.py and core/udp_helper.py: REQ_DEVINFO as a 6699 datagram under the discovery key, command 0x25, no return code, JSON naming the app and its address, sent to UDP 7000; TCP 6668 probed in parallel |
 | Gateways and UPDATE_DPS (gateway.go) | none published | tinytuya 1.20.0 (MIT), core/XenonDevice.py: the cid beside "dps" for 3.1 to 3.3, at the top and in "data" with ctype 0 for 3.4 and 3.5, the cid in answers at the top or in "data"; UPDATE_DPS as a dpId list |
 | Data point helpers (dp.go) | Python's colorsys conversion (an algorithm, written out in Go) | tinytuya 1.20.0 (MIT), BulbDevice.py, CoverDevice.py, core/Device.py: data point numbers of the bulb layouts, value ranges, the two hex colour formats, scene forms, detection rules, the cover value schemes and detection order, the countdown guess |
-| Interop peer (interop/peer/device.py, vectors.py) | our own scripts | call tinytuya 1.20.0's pack_message, unpack_message, parse_header, AESCipher, decrypt_udp, session key finalisation, generate_payload of a child device, and BulbDevice/CoverDevice class methods and tables; installed from PyPI at test time |
+| Key list, sub-device online list, device22 probing (scan.go, gateway.go, detect.go) | none published | tinytuya 1.20.0 (MIT), scanner.py and core/XenonDevice.py: trying keys in turn, the LAN_EXT_STREAM command and its `subdev_online_stat_query` request with an empty cid list and no version header, the data point ranges; hass-localtuya (GPL-3.0): the answer's "online", "offline" and "nearby" lists |
+| Persistent client (device.go) | none | tinytuya and tiny-go only for the feature list (reconnect, heartbeat, cache, callbacks) |
+| Infrared codes (ir.go) | none published | tinytuya 1.20.0 (MIT), Contrib/IRRemoteControlDevice.py: 16-bit little-endian pulse packing in base64 and hex, the optional leading "1", NEC and Samsung timings, bit order and complement checks, the 75 % to 125 % start-mark window |
+| IR head/key and Pronto (ir_headkey.go) | none published | tinytuya 1.20.0 (MIT), Contrib/IRRemoteControlDevice.py: the head's fields, units and symbol list, the key's send count, symbol runs and bit fields, the two head types' bit pairs, the packer's merging (pairwise, 10 % default), lettering, pair counting, symbol assignment and choice of the shorter reading, the Pronto word layout and its 0.241246 time-base factor |
+| Product helpers (contrib/) | none published | tinytuya 1.20.0 (MIT), the 15 Contrib classes: data point numbers, enumerated values, ranges and clamps, scalings, the doorbell's motion area text, the thermostat's 7-byte schedule periods and 52-byte sensor records, the SORIA frames' prefix detection and tags, the IR and RF command texts |
+| Interop peer (interop/peer/device.py, vectors.py, contrib.py) | our own scripts | call tinytuya 1.20.0's pack_message, unpack_message, parse_header, AESCipher, decrypt_udp, session key finalisation, generate_payload of a child device and of a gateway's LAN_EXT_STREAM request, BulbDevice/CoverDevice class methods and tables, IRRemoteControlDevice's static conversions, and the 15 Contrib classes with a recorder in place of their socket (contrib.py); installed from PyPI at test time |
 
 No specification or vendor text is reproduced; comments describe the
 protocol in our own words.
@@ -89,6 +127,8 @@ line-by-line comparison is needed, the notes above being the record.
 | legacy_test.go (TestLegacyCodec) | the 3.1 signature vector, computed independently with Python's hashlib |
 | v020_test.go (colours) | computed independently with Python's colorsys on 2026-10-11, not with tinytuya |
 | v020_test.go (other) | built by hand from the facts above |
+| v030_test.go (IR) | computed independently with Python's struct and base64 modules and the NEC algorithm on 2026-10-11, and the head and Pronto values by hand on 2026-10-12, not with tinytuya |
+| contrib/contrib_test.go | worked out by hand from the layouts on 2026-10-12, not with tinytuya |
 | interop/ | tinytuya 1.20.0's code, at test time (python:3.12.10-slim) |
 
 All device IDs, local keys and addresses are made-up demo values.

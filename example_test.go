@@ -61,6 +61,32 @@ func Example() {
 	}
 }
 
+// Keep a session with a plug open, follow its changes and switch it. It
+// needs a device, so it is not run.
+func ExampleNewDevice() {
+	dev := tuyalan.NewDevice(tuyalan.DeviceOptions{
+		Addr: "192.168.1.30", Version: "3.4", DevID: "bfdemoplug0000001", LocalKey: []byte("0123456789abcdef"),
+		OnChange: func(dps map[string]any) { fmt.Println("changed:", dps) },
+	})
+	if err := dev.Open(context.Background()); err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer dev.Close()
+	_ = dev.Set(map[string]any{"1": true}) // waits for the acknowledgement
+	fmt.Println(dev.Cache())               // the last data points seen
+}
+
+// Build an IR blaster's code for NEC address 4, command 8, and read it
+// back.
+func ExampleIRNECToPulses() {
+	code, _ := tuyalan.IRPulsesToBase64(tuyalan.IRNECToPulses(4, 8))
+	pulses, _ := tuyalan.IRBase64ToPulses(code)
+	c := tuyalan.IRPulsesToNEC(pulses)[0]
+	fmt.Println(c.Hex, c.Address, c.Data)
+	// Output: 20DF10EF 4 8
+}
+
 // Decode a discovery announcement.
 func ExampleParseBroadcast() {
 	b, _ := tuyalan.EncodeBroadcast(tuyalan.Broadcast{IP: "192.168.1.30", GwID: "bfdemoplug0000001", ProductKey: "keydemo", Version: "3.4"})

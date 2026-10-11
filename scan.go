@@ -258,6 +258,36 @@ func Identify(ctx context.Context, addr, devID string, localKey []byte, timeout 
 	return Identity{}, ErrNotIdentified
 }
 
+// ErrNoKeyMatched is returned by IdentifyWithKeys when none of the keys
+// identified the device.
+var ErrNoKeyMatched = errors.New("no local key identified the device")
+
+// IdentifyWithKeys tries each local key in turn against the device at addr
+// and returns the identity and the index of the key that worked, the way
+// tinytuya's force scan and tiny-go's ForceScan try a list of keys: the
+// device holds one of the keys but which is not known (for example after a
+// scan found an open port). For 3.4 and 3.5 the key is proven by the
+// session key negotiation and for 3.3 by the answer's integrity check, so a
+// wrong key does not match; a 3.1 device answers its query in clear, so any
+// key "identifies" it and its key is not verified. Keys of the wrong length
+// are skipped. timeout bounds each attempt (0 is 3 seconds). ctx stops it
+// early.
+func IdentifyWithKeys(ctx context.Context, addr, devID string, keys [][]byte, timeout time.Duration) (Identity, int, error) {
+	for i, k := range keys {
+		if ctx.Err() != nil {
+			return Identity{}, -1, ctx.Err()
+		}
+		if len(k) != 16 {
+			continue
+		}
+		id, err := Identify(ctx, addr, devID, k, timeout)
+		if err == nil {
+			return id, i, nil
+		}
+	}
+	return Identity{}, -1, ErrNoKeyMatched
+}
+
 func identifyLegacy(ctx context.Context, version, addr, devID string, localKey []byte, timeout time.Duration) (Identity, bool) {
 	c, err := Dial(ctx, addr, version, devID, localKey, timeout)
 	if err != nil {

@@ -95,6 +95,54 @@ func (s *Sub) UpdateDPS(ids []int) error {
 	return s.c.send(CmdUpdateDPs, updatePayload(ids, s.cid))
 }
 
+// SubdevQuery asks a gateway for its sub-devices' online state: a
+// LAN_EXT_STREAM request whose JSON is
+// {"reqType":"subdev_online_stat_query","data":{"cids":[]}} (the shape
+// tinytuya's subdev_query builds). The gateway answers with a
+// LAN_EXT_STREAM frame; ParseSubdevStatus reads it. 3.3 gateways do not
+// answer this; 3.4 and 3.5 gateways do.
+func (c *Conn) SubdevQuery() error {
+	b, _ := json.Marshal(map[string]any{
+		"reqType": "subdev_online_stat_query",
+		"data":    map[string]any{"cids": []string{}},
+	})
+	return c.send(CmdLanExtStream, b)
+}
+
+// SubdevStatus is a gateway's answer to SubdevQuery: the node IDs of the
+// sub-devices it reports online, offline and nearby (an answer may carry
+// only some of these, and a gateway with many sub-devices may split them
+// across several answers).
+type SubdevStatus struct {
+	Online  []string
+	Offline []string
+	Nearby  []string
+}
+
+// ParseSubdevStatus reads a LAN_EXT_STREAM answer's payload into a
+// SubdevStatus. The lists come from "data.online", "data.offline" and
+// "data.nearby" (the fields a gateway reports, as observed by the LocalTuya
+// project). ok is false when the payload is not such an answer.
+func ParseSubdevStatus(payload []byte) (SubdevStatus, bool) {
+	if len(payload) == 0 || payload[0] != '{' {
+		return SubdevStatus{}, false
+	}
+	var m struct {
+		Data struct {
+			Online  []string `json:"online"`
+			Offline []string `json:"offline"`
+			Nearby  []string `json:"nearby"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(payload, &m) != nil {
+		return SubdevStatus{}, false
+	}
+	if m.Data.Online == nil && m.Data.Offline == nil && m.Data.Nearby == nil {
+		return SubdevStatus{}, false
+	}
+	return SubdevStatus{Online: m.Data.Online, Offline: m.Data.Offline, Nearby: m.Data.Nearby}, true
+}
+
 // CID returns the sub-device node ID a decoded payload is about: a
 // top-level "cid" or "data.cid"; "" for the gateway itself or a plain
 // device.

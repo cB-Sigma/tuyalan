@@ -31,7 +31,20 @@ layouts, colour formats and cover value schemes in dp.go are likewise
 facts read from tinytuya's bulb and cover classes. The RGB and HSV
 conversion in dp.go follows the algorithm of Python's colorsys module,
 written anew in Go so its results match what tinytuya writes; no
-Python code was copied.
+Python code was copied. The infrared pulse packing and the NEC and
+Samsung encodings in ir.go, the sub-device online query and the data
+point ranges of DetectAvailableDPS are likewise facts read from
+tinytuya 1.20.0, as are the IR head/key and Pronto rules in
+ir_headkey.go and the product data point layouts, ranges and binary
+formats in the contrib package, which come from tinytuya's Contrib
+classes (contributed to tinytuya by its community under its MIT
+licence). No code was copied; the packer is written anew in Go to make
+the same choices.
+
+The field names of a gateway's answer to the sub-device online query
+("online", "offline", "nearby") were read from hass-localtuya
+(github.com/xZetsubou/hass-localtuya; GPL-3.0). Only those facts were
+taken; no code was copied or translated from it.
 
 The discovery key (UDPKey) is the MD5 digest of a short string that every
 Tuya LAN implementation uses to read announcements; it is a public
@@ -46,7 +59,9 @@ interop/peer/Dockerfile installs tinytuya 1.20.0 (MIT, Copyright (c)
 python:3.12.10-slim image at test time (v0.1.0 ran on python:3.14-slim);
 nothing of tinytuya is copied into this repository. interop/peer/device.py
 and interop/peer/vectors.py are our own scripts that call tinytuya's
-functions and classes.
+functions and classes (including, from v0.3.0, its
+IRRemoteControlDevice conversions); interop/peer/contrib.py, also our
+own, drives tinytuya's Contrib classes.
 
 Dependencies
 ------------

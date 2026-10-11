@@ -8,3 +8,4 @@ RUN pip install --no-cache-dir tinytuya==1.20.0
 COPY device.py /peer/device.py
 WORKDIR /peer
 COPY vectors.py /peer/vectors.py
+COPY contrib.py /peer/contrib.py
